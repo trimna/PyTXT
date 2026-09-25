@@ -28,7 +28,9 @@ Sadly, PyTXT got an 11/70 in VirusTotal, and in this update, I tried to fix this
 After working little by little, I finished PyTXT 1.1, here are the updates that were made in **our** favourite text editor:
 
 -Update 1: Support for opening files via Explorer
+
 -Update 2: Added error handling
+
 -Update 3: Tracking unsaved changes
 
 You can also download in the PyTXT webpage: https://trimnalosite.neocities.org/pytxt
