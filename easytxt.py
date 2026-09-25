@@ -5,35 +5,23 @@ import traceback
 
 from PyQt5.QtWidgets import *
 from PyQt5.QtGui import QIcon, QFont
-from PyQt5 import uic
+from PyQt5.QtCore import QRect
 
 
 def resource_path(filename):
-
     if getattr(sys, "frozen", False):
         base_dir = os.path.dirname(sys.executable)
-
         paths = [
             os.path.join(base_dir, filename),
             os.path.join(base_dir, "_internal", filename)
         ]
-
     else:
         base_dir = os.path.dirname(os.path.abspath(__file__))
-
-        paths = [
-            os.path.join(base_dir, filename)
-        ]
-
+        paths = [os.path.join(base_dir, filename)]
     for path in paths:
         if os.path.isfile(path):
             return path
-
-    raise FileNotFoundError(
-        f"Arquivo não encontrado: {filename}\n\n"
-        f"Caminhos procurados:\n" +
-        "\n".join(paths)
-    )
+    raise FileNotFoundError(...)
 
 
 class FontDialog(QDialog):
@@ -82,8 +70,7 @@ class TheGUI(QMainWindow):
         super(TheGUI, self).__init__()
 
         try:
-            ui_path = resource_path("untitled.ui")
-            uic.loadUi(ui_path, self)
+            self.init_ui()
         except Exception as e:
             QMessageBox.critical(
                 None,
@@ -146,6 +133,98 @@ class TheGUI(QMainWindow):
         self._modified = False
 
         self.show()
+
+    def init_ui(self):
+
+        self.setObjectName("MainWindow")
+        self.resize(800, 600)
+        self.setWindowTitle("PyTXT")
+
+        self.centralwidget = QWidget(self)
+        self.centralwidget.setObjectName("centralwidget")
+
+        self.textEdit = QTextEdit(self.centralwidget)
+        self.textEdit.setObjectName("textEdit")
+        self.textEdit.setGeometry(QRect(20, 20, 761, 531))
+
+        self.setCentralWidget(self.centralwidget)
+
+        self.menubar = QMenuBar(self)
+        self.menubar.setObjectName("menubar")
+        self.menubar.setGeometry(QRect(0, 0, 800, 26))
+
+        self.menuFile = QMenu(self.menubar)
+        self.menuFile.setObjectName("menuFile")
+        self.menuFile.setTitle("File")
+
+        self.menuEdit = QMenu(self.menubar)
+        self.menuEdit.setObjectName("menuEdit")
+        self.menuEdit.setTitle("Edit")
+
+        self.menuOptions = QMenu(self.menubar)
+        self.menuOptions.setObjectName("menuOptions")
+        self.menuOptions.setTitle("Options")
+
+        self.menuTheme = QMenu(self.menuOptions)
+        self.menuTheme.setObjectName("menuTheme")
+        self.menuTheme.setTitle("Theme")
+
+        self.setMenuBar(self.menubar)
+
+        self.statusbar = QStatusBar(self)
+        self.statusbar.setObjectName("statusbar")
+        self.setStatusBar(self.statusbar)
+
+        self.actionOpen = QAction("Open", self)
+        self.actionOpen.setObjectName("actionOpen")
+
+        self.actionSave = QAction("Save", self)
+        self.actionSave.setObjectName("actionSave")
+
+        self.actionExit = QAction("Exit", self)
+        self.actionExit.setObjectName("actionExit")
+
+        self.actionUndo = QAction("Undo", self)
+        self.actionUndo.setObjectName("actionUndo")
+
+        self.actionRedo = QAction("Redo", self)
+        self.actionRedo.setObjectName("actionRedo")
+
+        self.actionCopy = QAction("Copy", self)
+        self.actionCopy.setObjectName("actionCopy")
+
+        self.actionSelect_All = QAction("Select All", self)
+        self.actionSelect_All.setObjectName("actionSelect_All")
+
+        self.actionLight_Mode = QAction("Light Mode", self)
+        self.actionLight_Mode.setObjectName("actionLight_Mode")
+
+        self.actionDark_Mode = QAction("Dark Mode", self)
+        self.actionDark_Mode.setObjectName("actionDark_Mode")
+
+        self.actionEdit_Font_Info = QAction("Edit Font Info", self)
+        self.actionEdit_Font_Info.setObjectName("actionEdit_Font_Info")
+
+        self.menuFile.addAction(self.actionOpen)
+        self.menuFile.addAction(self.actionSave)
+        self.menuFile.addSeparator()
+        self.menuFile.addAction(self.actionExit)
+
+        self.menuEdit.addAction(self.actionUndo)
+        self.menuEdit.addAction(self.actionRedo)
+        self.menuEdit.addSeparator()
+        self.menuEdit.addAction(self.actionCopy)
+        self.menuEdit.addAction(self.actionSelect_All)
+
+        self.menuTheme.addAction(self.actionLight_Mode)
+        self.menuTheme.addAction(self.actionDark_Mode)
+
+        self.menuOptions.addAction(self.menuTheme.menuAction())
+        self.menuOptions.addAction(self.actionEdit_Font_Info)
+
+        self.menubar.addAction(self.menuFile.menuAction())
+        self.menubar.addAction(self.menuEdit.menuAction())
+        self.menubar.addAction(self.menuOptions.menuAction())
 
     def open_path(self, filename):
         """Opens a specific file (used when receiving the path
