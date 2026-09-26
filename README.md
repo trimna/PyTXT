@@ -1,7 +1,7 @@
 # PyTXT
-PyTXT is a text editor which is made in Python and PyQt5 that was mede to improve my Python skills, It's a recreation of the Windows Notepad, and it does almost everything Notepad does
+PyTXT is a text editor which is made in Python and PyQt5 that was made to improve my Python skills, It's a recreation of the Windows Notepad, and it does almost everything Notepad does
 
-At PyTXT ou can:
+With PyTXT ou can:
 
 - Type
 
