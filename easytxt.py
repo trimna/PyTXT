@@ -3,12 +3,12 @@ import os, sys, ctypes, traceback
 from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QWidget, QTextEdit, QMenuBar, QMenu,
     QStatusBar, QAction, QMessageBox, QFileDialog, QDialog,
-    QVBoxLayout, QLabel, QFontComboBox, QSpinBox,
+    QVBoxLayout, QHBoxLayout, QLabel, QFontComboBox, QSpinBox,
     QDialogButtonBox, QTabWidget, QPushButton
 )
 
-from PyQt5.QtGui import QIcon, QFont
-from PyQt5.QtCore import Qt, QTimer
+from PyQt5.QtGui import QIcon, QFont, QFontInfo, QPainter, QColor, QKeySequence
+from PyQt5.QtCore import Qt, QTimer, QRect, QPoint, pyqtSignal
 
 
 def resource_path(filename):
@@ -91,28 +91,230 @@ class GoToLineDialog(QDialog):
         return self.spin_box.value()
 
 
-class TabWidget(QTabWidget):
+class LineNumberArea(QWidget):
+    """Gutter widget that lives inside a LineNumberEditor.
+
+    It only forwards painting to the editor, which knows the geometry
+    of every text block.
+    """
+
+    def __init__(self, editor):
+        super().__init__(editor)
+        self.editor = editor
+
+    def paintEvent(self, event):
+        self.editor.line_number_area_paint_event(event)
+
+
+class LineNumberEditor(QTextEdit):
+    """QTextEdit with a line-number gutter and per-editor font zoom."""
+
+    MIN_FONT_SIZE = 6
+    MAX_FONT_SIZE = 72
+
+    zoomChanged = pyqtSignal(int)
+
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.new_tab_button = None
 
-    def set_new_tab_button(self, button):
-        self.new_tab_button = button
-        button.setParent(self)
-        button.raise_()
-        self.position_new_tab_button()
+        # Plain text only: keeps zoom/font changes consistent for all text.
+        self.setAcceptRichText(False)
+
+        self._gutter_width = 0
+        self._dark = False
+
+        self.line_number_area = LineNumberArea(self)
+
+        self.document().blockCountChanged.connect(
+            self.update_line_number_area_width
+        )
+        self.document().documentLayout().documentSizeChanged.connect(
+            self._refresh_gutter
+        )
+        self.verticalScrollBar().valueChanged.connect(self._refresh_gutter)
+        self.textChanged.connect(self._refresh_gutter)
+        self.cursorPositionChanged.connect(self._refresh_gutter)
+
+        self.update_line_number_area_width()
+
+    # ---------- theme ----------
+
+    def set_dark(self, dark):
+        self._dark = dark
+        self.line_number_area.update()
+
+    def _gutter_colors(self):
+        if self._dark:
+            return (
+                QColor("#202020"),  # background
+                QColor("#777777"),  # numbers
+                QColor("#cccccc"),  # current line number
+                QColor("#444444"),  # separator
+            )
+
+        return (
+            QColor("#f0f0f0"),
+            QColor("#808080"),
+            QColor("#202020"),
+            QColor("#d0d0d0"),
+        )
+
+    # ---------- gutter geometry ----------
+
+    def line_number_area_width(self):
+        metrics = self.fontMetrics()
+
+        if hasattr(metrics, "horizontalAdvance"):
+            digit_width = metrics.horizontalAdvance("9")
+        else:
+            digit_width = metrics.width("9")
+
+        digits = max(3, len(str(max(1, self.document().blockCount()))))
+
+        return 12 + digit_width * digits
+
+    def update_line_number_area_width(self, *args):
+        width = self.line_number_area_width()
+
+        if width != self._gutter_width:
+            self._gutter_width = width
+            self.setViewportMargins(width, 0, 0, 0)
+
+        self._position_gutter()
+        self.line_number_area.update()
+
+    def _position_gutter(self):
+        rect = self.contentsRect()
+        height = rect.height()
+
+        hbar = self.horizontalScrollBar()
+        if hbar.isVisible():
+            height -= hbar.height()
+
+        self.line_number_area.setGeometry(
+            QRect(rect.left(), rect.top(), self._gutter_width, height)
+        )
+
+    def _refresh_gutter(self, *args):
+        self.line_number_area.update()
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
-        self.position_new_tab_button()
+        self._position_gutter()
 
-    def position_new_tab_button(self):
-        if self.new_tab_button:
-            button = self.new_tab_button
-            x = self.width() - button.width() - 4
-            y = 2
-            button.move(x, y)
-            button.raise_()
+    def setFont(self, font):
+        super().setFont(font)
+        self.update_line_number_area_width()
+
+    # ---------- painting ----------
+
+    def line_number_area_paint_event(self, event):
+        bg, fg, current_fg, line = self._gutter_colors()
+
+        painter = QPainter(self.line_number_area)
+        painter.fillRect(event.rect(), bg)
+
+        width = self.line_number_area.width()
+
+        painter.setPen(line)
+        painter.drawLine(
+            width - 1, event.rect().top(), width - 1, event.rect().bottom()
+        )
+
+        painter.setFont(self.font())
+        line_height = painter.fontMetrics().height()
+
+        layout = self.document().documentLayout()
+        scroll = self.verticalScrollBar().value()
+        current_block = self.textCursor().blockNumber()
+
+        clip_top = event.rect().top()
+        clip_bottom = event.rect().bottom()
+
+        block = self.cursorForPosition(QPoint(0, 0)).block()
+
+        while block.isValid():
+            rect = layout.blockBoundingRect(block)
+            top = int(rect.top()) - scroll
+
+            if top > clip_bottom:
+                break
+
+            if block.isVisible() and top + int(rect.height()) >= clip_top:
+                number = block.blockNumber()
+
+                painter.setPen(current_fg if number == current_block else fg)
+                painter.drawText(
+                    0,
+                    top,
+                    width - 6,
+                    line_height,
+                    Qt.AlignRight | Qt.AlignVCenter,
+                    str(number + 1)
+                )
+
+            block = block.next()
+
+        painter.end()
+
+    # ---------- zoom ----------
+
+    def zoom(self, delta):
+        font = QFont(self.font())
+        size = font.pointSize()
+
+        if size <= 0:
+            size = QFontInfo(font).pointSize()
+
+        if size <= 0:
+            size = 10
+
+        new_size = max(self.MIN_FONT_SIZE, min(self.MAX_FONT_SIZE, size + delta))
+
+        if new_size != size:
+            font.setPointSize(new_size)
+            self.setFont(font)
+
+        self.zoomChanged.emit(new_size)
+        return new_size
+
+    def wheelEvent(self, event):
+        if event.modifiers() & Qt.ControlModifier:
+            delta = event.angleDelta().y()
+
+            if delta > 0:
+                self.zoom(1)
+            elif delta < 0:
+                self.zoom(-1)
+
+            event.accept()
+            return
+
+        super().wheelEvent(event)
+
+
+class TabWidget(QTabWidget):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.new_tab_container = None
+
+        # Tabs keep their full size (no eliding/shrinking), so when there are
+        # too many to fit, the tab bar shows its scroll arrows instead.
+        self.setElideMode(Qt.ElideNone)
+        self.setUsesScrollButtons(True)
+        self.tabBar().setExpanding(False)
+
+    def set_new_tab_button(self, button):
+        # The button lives in the tab widget's corner, so Qt reserves space
+        # for it and the tab bar (titles and scroll arrows) never overlaps it.
+        container = QWidget(self)
+        layout = QHBoxLayout(container)
+        layout.setContentsMargins(6, 0, 4, 0)
+        layout.setSpacing(0)
+        layout.addWidget(button)
+
+        self.new_tab_container = container
+        self.setCornerWidget(container, Qt.TopRightCorner)
 
 
 class TheGUI(QMainWindow):
@@ -121,6 +323,8 @@ class TheGUI(QMainWindow):
     def __init__(self, file_to_open=None):
         super().__init__()
         TheGUI.instances.append(self)
+
+        self.dark_enabled = False
 
         try:
             self.init_ui()
@@ -134,12 +338,18 @@ class TheGUI(QMainWindow):
 
         self.setWindowTitle("PyTXT")
 
-        try:
-            icon_path = resource_path("PyTXT.ico")
-            if os.path.isfile(icon_path):
-                self.setWindowIcon(QIcon(icon_path))
-        except Exception:
-            pass
+        # Prefer PyTXT.png; fall back to PyTXT.ico if the PNG is missing.
+        for icon_name in ("PyTXT.png", "PyTXT.ico"):
+            try:
+                icon_path = resource_path(icon_name)
+            except FileNotFoundError:
+                continue
+
+            icon = QIcon(icon_path)
+
+            if not icon.isNull():
+                self.setWindowIcon(icon)
+                break
 
         self.actionNewTab.triggered.connect(lambda: self.new_tab())
         self.actionNewWindow.triggered.connect(self.new_window)
@@ -158,6 +368,8 @@ class TheGUI(QMainWindow):
         self.actionLight_Mode.triggered.connect(self.light_mode)
         self.actionDark_Mode.triggered.connect(self.dark_mode)
         self.actionEdit_Font_Info.triggered.connect(self.edit_font)
+        self.actionZoom_In.triggered.connect(self.zoom_in)
+        self.actionZoom_Out.triggered.connect(self.zoom_out)
 
         self.auto_save_timer = QTimer(self)
         self.auto_save_timer.setInterval(30000)
@@ -186,8 +398,8 @@ class TheGUI(QMainWindow):
         self.tab_widget.tabCloseRequested.connect(self.close_tab_at)
         self.tab_widget.currentChanged.connect(self.tab_changed)
 
-        self.new_tab_btn = QPushButton("+", self.tab_widget)
-        self.new_tab_btn.setFixedSize(28, 24)
+        self.new_tab_btn = QPushButton("+")
+        self.new_tab_btn.setFixedSize(26, 20)
         self.new_tab_btn.setToolTip("New Tab")
         self.new_tab_btn.clicked.connect(lambda: self.new_tab())
 
@@ -208,6 +420,10 @@ class TheGUI(QMainWindow):
 
         self.statusbar = QStatusBar(self)
         self.setStatusBar(self.statusbar)
+
+        self.cursor_label = QLabel("Ln 1, Col 1")
+        self.cursor_label.setMinimumWidth(90)
+        self.statusbar.addPermanentWidget(self.cursor_label)
 
         self.char_word_label = QLabel("Words: 0 | Characters: 0")
         self.statusbar.addPermanentWidget(self.char_word_label)
@@ -252,6 +468,16 @@ class TheGUI(QMainWindow):
         self.actionDark_Mode = QAction("Dark Mode", self)
         self.actionEdit_Font_Info = QAction("Edit Font Info", self)
 
+        # Ctrl++ (and Ctrl+= for keyboards where + needs Shift), Ctrl+-
+        self.actionZoom_In = QAction("Zoom In", self)
+        self.actionZoom_In.setShortcuts([
+            QKeySequence("Ctrl++"),
+            QKeySequence("Ctrl+=")
+        ])
+
+        self.actionZoom_Out = QAction("Zoom Out", self)
+        self.actionZoom_Out.setShortcut(QKeySequence("Ctrl+-"))
+
         self.menuFile.addAction(self.actionNewTab)
         self.menuFile.addAction(self.actionNewWindow)
         self.menuFile.addSeparator()
@@ -276,6 +502,9 @@ class TheGUI(QMainWindow):
 
         self.menuOptions.addMenu(self.menuTheme)
         self.menuOptions.addAction(self.actionEdit_Font_Info)
+        self.menuOptions.addSeparator()
+        self.menuOptions.addAction(self.actionZoom_In)
+        self.menuOptions.addAction(self.actionZoom_Out)
 
         self.menubar.addMenu(self.menuFile)
         self.menubar.addMenu(self.menuEdit)
@@ -289,6 +518,18 @@ class TheGUI(QMainWindow):
 
         return None
 
+    def all_editors(self):
+        editors = []
+
+        for i in range(self.tab_widget.count()):
+            page = self.tab_widget.widget(i)
+            editor = page.findChild(QTextEdit) if page else None
+
+            if editor:
+                editors.append(editor)
+
+        return editors
+
     def new_window(self):
         new_win = TheGUI()
         new_win.show()
@@ -298,8 +539,9 @@ class TheGUI(QMainWindow):
         layout = QVBoxLayout(tab_page)
         layout.setContentsMargins(0, 0, 0, 0)
 
-        editor = QTextEdit(tab_page)
-        editor.setText(content)
+        editor = LineNumberEditor(tab_page)
+        editor.setPlainText(content)
+        editor.set_dark(self.dark_enabled)
 
         layout.addWidget(editor)
 
@@ -310,10 +552,13 @@ class TheGUI(QMainWindow):
             lambda: self.mark_modified(tab_page)
         )
         editor.textChanged.connect(self.update_statusbar)
+        editor.cursorPositionChanged.connect(self.update_cursor_label)
+        editor.zoomChanged.connect(self.show_zoom_message)
 
         self.tab_widget.addTab(tab_page, title)
         self.tab_widget.setCurrentWidget(tab_page)
         self.update_statusbar()
+        self.update_cursor_label()
 
         return tab_page
 
@@ -349,8 +594,23 @@ class TheGUI(QMainWindow):
                 "Words: 0 | Characters: 0"
             )
 
+    def update_cursor_label(self):
+        editor = self.current_editor()
+
+        if editor:
+            cursor = editor.textCursor()
+            line = cursor.blockNumber() + 1
+            column = cursor.positionInBlock() + 1
+            self.cursor_label.setText(f"Ln {line}, Col {column}")
+        else:
+            self.cursor_label.setText("Ln 1, Col 1")
+
+    def show_zoom_message(self, size):
+        self.statusbar.showMessage(f"Font size: {size} pt", 1500)
+
     def tab_changed(self, index):
         self.update_statusbar()
+        self.update_cursor_label()
 
     def confirm_discard_changes(self, tab_page):
         if not tab_page._modified:
@@ -404,7 +664,7 @@ class TheGUI(QMainWindow):
             and not editor.toPlainText().strip()
             and not current_page.current_file
         ):
-            editor.setText(content)
+            editor.setPlainText(content)
             current_page.current_file = filename
             self.unmark_modified(current_page, filename)
 
@@ -599,11 +859,30 @@ class TheGUI(QMainWindow):
                 cursor.setPosition(block.position())
                 ed.setTextCursor(cursor)
 
+    def zoom_in(self):
+        ed = self.current_editor()
+
+        if ed:
+            ed.zoom(1)
+
+    def zoom_out(self):
+        ed = self.current_editor()
+
+        if ed:
+            ed.zoom(-1)
+
     def light_mode(self):
+        self.dark_enabled = False
+
         self.setStyleSheet("")
         self.new_tab_btn.setStyleSheet("")
 
+        for editor in self.all_editors():
+            editor.set_dark(False)
+
     def dark_mode(self):
+        self.dark_enabled = True
+
         self.setStyleSheet("""
             QMainWindow {
                 background-color: #202020;
@@ -671,7 +950,8 @@ class TheGUI(QMainWindow):
             }
         """)
 
-        self.tab_widget.position_new_tab_button()
+        for editor in self.all_editors():
+            editor.set_dark(True)
 
     def edit_font(self):
         editor = self.current_editor()
@@ -711,6 +991,13 @@ def main():
         pass
 
     app = QApplication(sys.argv)
+
+    # Application-wide icon: used by every window, dialog and message box,
+    # and by the taskbar entry.
+    try:
+        app.setWindowIcon(QIcon(resource_path("PyTXT.ico")))
+    except Exception:
+        pass
 
     def handle_exception(exc_type, exc_value, exc_traceback):
         if issubclass(exc_type, KeyboardInterrupt):
