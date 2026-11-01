@@ -8,7 +8,7 @@ from PyQt5.QtWidgets import (
 )
 
 from PyQt5.QtGui import QIcon, QFont, QFontInfo, QPainter, QColor, QKeySequence
-from PyQt5.QtCore import Qt, QTimer, QRect, QPoint, pyqtSignal
+from PyQt5.QtCore import Qt, QTimer, QRect, QPoint
 
 
 def resource_path(filename):
@@ -111,8 +111,6 @@ class LineNumberEditor(QTextEdit):
 
     MIN_FONT_SIZE = 6
     MAX_FONT_SIZE = 72
-
-    zoomChanged = pyqtSignal(int)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -275,22 +273,7 @@ class LineNumberEditor(QTextEdit):
             font.setPointSize(new_size)
             self.setFont(font)
 
-        self.zoomChanged.emit(new_size)
         return new_size
-
-    def wheelEvent(self, event):
-        if event.modifiers() & Qt.ControlModifier:
-            delta = event.angleDelta().y()
-
-            if delta > 0:
-                self.zoom(1)
-            elif delta < 0:
-                self.zoom(-1)
-
-            event.accept()
-            return
-
-        super().wheelEvent(event)
 
 
 class TabWidget(QTabWidget):
@@ -502,9 +485,10 @@ class TheGUI(QMainWindow):
 
         self.menuOptions.addMenu(self.menuTheme)
         self.menuOptions.addAction(self.actionEdit_Font_Info)
-        self.menuOptions.addSeparator()
-        self.menuOptions.addAction(self.actionZoom_In)
-        self.menuOptions.addAction(self.actionZoom_Out)
+        # Zoom is keyboard-only: the actions are attached to the window so
+        # their shortcuts work, but they do not appear in any menu.
+        self.addAction(self.actionZoom_In)
+        self.addAction(self.actionZoom_Out)
 
         self.menubar.addMenu(self.menuFile)
         self.menubar.addMenu(self.menuEdit)
@@ -553,7 +537,6 @@ class TheGUI(QMainWindow):
         )
         editor.textChanged.connect(self.update_statusbar)
         editor.cursorPositionChanged.connect(self.update_cursor_label)
-        editor.zoomChanged.connect(self.show_zoom_message)
 
         self.tab_widget.addTab(tab_page, title)
         self.tab_widget.setCurrentWidget(tab_page)
@@ -604,9 +587,6 @@ class TheGUI(QMainWindow):
             self.cursor_label.setText(f"Ln {line}, Col {column}")
         else:
             self.cursor_label.setText("Ln 1, Col 1")
-
-    def show_zoom_message(self, size):
-        self.statusbar.showMessage(f"Font size: {size} pt", 1500)
 
     def tab_changed(self, index):
         self.update_statusbar()
